@@ -191,7 +191,7 @@ return { ${objLines.join(" ")} } as any;
 
     sf.addTypeAlias({
       name: "ContainerKey",
-      type: `string | ((ctx: { request?: Request; env?: any; args: any[] }) => string | Promise<string>)`,
+      type: `string | ((ctx: { args: any[] }) => string | Promise<string>)`,
     });
 
     sf.addVariableStatement({
@@ -226,7 +226,7 @@ return { ${objLines.join(" ")} } as any;
       parameters: [
         { name: "namespace", type: "string" },
         { name: "exportName", type: "string" },
-        { name: "ctx", type: `{ request?: Request; env?: any; args: any[] }` },
+        { name: "ctx", type: `{ args: any[] }` },
         { name: "fallback?", type: "ContainerKey" },
       ],
       returnType: "string | Promise<string>",

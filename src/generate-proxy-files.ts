@@ -36,7 +36,7 @@ export function generateProxyFiles(opts: ProxyFileGenOptions) {
 
     sf.addTypeAlias({
       name: "__Key",
-      type: `string | ((ctx: { request?: Request; env?: any; args: any[] }) => string | Promise<string>)`,
+      type: `string | ((ctx: { args: any[] }) => string | Promise<string>)`,
     });
 
     for (const ex of mod.exports) {

@@ -14,7 +14,7 @@ export function generateRuntime(gdirAbs: string, runtimeFileName: string) {
   sf.addTypeAlias({
     isExported: true,
     name: "ContainerKey",
-    type: `string | ((ctx: { request?: Request; env?: any; args: any[] }) => string | Promise<string>)`,
+    type: `string | ((ctx: { args: any[] }) => string | Promise<string>)`,
   });
 
   sf.addTypeAlias({
