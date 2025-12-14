@@ -31,7 +31,7 @@ export function generateProxyFiles(opts: ProxyFileGenOptions) {
     });
     sf.addImportDeclaration({
       moduleSpecifier: `${genBase}/${generatedContextFileName.replace(/\.ts$/, "")}`,
-      namedImports: ["__getNodejsFnStore", "__resolveContainerKey"],
+      namedImports: ["__resolveContainerKey"],
     });
 
     sf.addTypeAlias({
@@ -62,17 +62,14 @@ export function generateProxyFiles(opts: ProxyFileGenOptions) {
             type: tName,
             initializer: `
 ((...args: any[]) => {
-  const s = __getNodejsFnStore();
-  if (!s) throw new Error("create-nodejs-fn: missing context. Wrap fetch with withNodejsFn().");
-
-  const ctx = { request: s.request, env: s.env, args };
-  const localKey = (${keyExpr}) as __Key;
+  const ctx = { args };
+  const localKey = (${keyExpr}) as __Key | undefined;
   const keyP = __resolveContainerKey(${JSON.stringify(mod.namespace)}, ${JSON.stringify(
     ex.name,
-  )}, ctx, localKey ?? (s.containerKey as __Key));
+  )}, ctx, localKey ?? "default");
 
   return Promise.resolve(keyP).then((key) =>
-    (containers({ env: s.env, containerKey: key }) as any).${mod.namespace}.${ex.name}(...args),
+    (containers({ containerKey: key }) as any).${mod.namespace}.${ex.name}(...args),
   );
 }) as any
             `.trim(),

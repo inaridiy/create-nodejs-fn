@@ -51,6 +51,11 @@ export function generateWorkerFiles(opts: WorkerFileGenOptions) {
       namedImports: ["newHttpBatchRpcSession"],
     });
 
+    sf.addImportDeclaration({
+      moduleSpecifier: "cloudflare:workers",
+      namedImports: ["env"],
+    });
+
     sf.addVariableStatement({
       declarationKind: VariableDeclarationKind.Const,
       isExported: true,
@@ -110,9 +115,9 @@ export function generateWorkerFiles(opts: WorkerFileGenOptions) {
     sf.addFunction({
       isExported: true,
       name: "rawClient",
-      parameters: [{ name: "ctx", type: `{ env: any; containerKey?: string }` }],
+      parameters: [{ name: "ctx", type: `{ containerKey?: string }` }],
       statements: `
-const ns = ctx.env?.[BINDING_NAME];
+const ns = env?.[BINDING_NAME];
 if (!ns?.getByName) throw new Error(\`Container binding missing: \${BINDING_NAME}\`);
 const stub = ns.getByName(ctx.containerKey ?? "default");
 return newHttpBatchRpcSession<FlatApi>(stub);
@@ -133,7 +138,7 @@ return newHttpBatchRpcSession<FlatApi>(stub);
     sf.addFunction({
       isExported: true,
       name: "containers",
-      parameters: [{ name: "ctx", type: `{ env: any; containerKey?: string }` }],
+      parameters: [{ name: "ctx", type: `{ containerKey?: string }` }],
       returnType: "Containers",
       statements: `
 const rpc = rawClient(ctx);
@@ -182,29 +187,11 @@ return { ${objLines.join(" ")} } as any;
   // --- create-nodejs-fn.context.ts ---
   {
     const sf = genProject.createSourceFile(ctxPath, "", { overwrite: true });
-    sf.addStatements([
-      "// AUTO-GENERATED. DO NOT EDIT.",
-      '// Requires Workers compatibility_flags: ["nodejs_als"] or ["nodejs_compat"]',
-    ]);
-
-    sf.addImportDeclaration({
-      moduleSpecifier: "node:async_hooks",
-      namedImports: ["AsyncLocalStorage"],
-    });
+    sf.addStatements(["// AUTO-GENERATED. DO NOT EDIT."]);
 
     sf.addTypeAlias({
       name: "ContainerKey",
       type: `string | ((ctx: { request?: Request; env?: any; args: any[] }) => string | Promise<string>)`,
-    });
-
-    sf.addTypeAlias({
-      name: "Store",
-      type: `{ request: Request | undefined; env: any; containerKey?: ContainerKey }`,
-    });
-
-    sf.addVariableStatement({
-      declarationKind: VariableDeclarationKind.Const,
-      declarations: [{ name: "als", initializer: "new AsyncLocalStorage<Store>()" }],
     });
 
     sf.addVariableStatement({
@@ -231,29 +218,6 @@ return { ${objLines.join(" ")} } as any;
         { name: "key", type: "ContainerKey" },
       ],
       statements: `registry.set(\`\${namespace}::*\`, key);`,
-    });
-
-    sf.addFunction({
-      isExported: true,
-      name: "__getNodejsFnStore",
-      returnType: "Store | undefined",
-      statements: `return als.getStore() ?? { request: undefined, env: undefined };`,
-    });
-
-    sf.addFunction({
-      isExported: true,
-      name: "withNodejsFn",
-      parameters: [
-        {
-          name: "handler",
-          type: `(request: Request, env: any, ctx: ExecutionContext) => Promise<Response> | Response`,
-        },
-        { name: "opts?", type: `{ containerKey?: ContainerKey }` },
-      ],
-      statements: `
-return (request: Request, env: any, ctx: ExecutionContext) =>
-  als.run({ request, env, containerKey: opts?.containerKey }, () => handler(request, env, ctx));
-      `,
     });
 
     sf.addFunction({

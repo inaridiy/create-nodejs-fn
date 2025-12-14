@@ -1,7 +1,6 @@
 import { sValidator } from "@hono/standard-validator";
 import { Hono } from "hono";
 import z from "zod";
-import { withNodejsFn } from "./__generated__/create-nodejs-fn.context";
 import { renderPdfPage } from "./pdf.container";
 
 const app = new Hono();
@@ -19,5 +18,5 @@ app.get(
 export { NodejsFnContainer } from "./__generated__/create-nodejs-fn.do";
 
 export default {
-  fetch: withNodejsFn(app.fetch),
+  fetch: app.fetch,
 };
