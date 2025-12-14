@@ -28,8 +28,9 @@
   },
   "dependencies": {
     "esbuild": "^0.27.1",
-    "gunshi": "^0.27.0",
     "glob": "^13.0.0",
+    "gunshi": "^0.27.0",
+    "picocolors": "^1.1.1",
     "ts-morph": "^27.0.2",
     "vite": "^7.2.7"
   }

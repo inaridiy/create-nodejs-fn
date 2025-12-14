@@ -10,122 +10,183 @@ import { ensureDir, writeFileIfChanged } from "./fs-utils";
 type InitOptions = {
   yes: boolean;
   force: boolean;
-};
+  dryRun: boolean;
 
-type InitAnswers = {
-  name: string;
-  main: string;
+  // Defaults are fine for most users; override only when needed.
   className: string;
   binding: string;
   image: string;
-  compatibilityDate: string;
   maxInstances: number;
+
+  // If omitted: keep existing compatibility_date; if missing, use today's UTC date.
+  compatibilityDate?: string;
+
+  // If omitted: use wrangler.jsonc main; else try common files; if not found, skip export injection.
+  entry?: string;
 };
 
 type Prompter = {
-  text: (message: string, defaultValue: string) => Promise<string>;
-  number: (message: string, defaultValue: number) => Promise<number>;
   confirm: (message: string, defaultValue?: boolean) => Promise<boolean>;
   close: () => void;
 };
 
+type WranglerReadResult = {
+  raw: string;
+  data: any;
+  hasJsoncComments: boolean;
+};
+
 const moduleDir =
-  typeof __dirname === "string"
-    ? __dirname
-    : path.dirname(fileURLToPath(import.meta.url));
+  typeof __dirname === "string" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 const pkgJsonPath = path.resolve(moduleDir, "../package.json");
 const pkg = fs.existsSync(pkgJsonPath)
   ? JSON.parse(fs.readFileSync(pkgJsonPath, "utf8"))
   : { version: "0.0.0" };
 const VERSION = pkg.version ?? "0.0.0";
 
+const DEFAULTS = {
+  className: "NodejsFnContainer",
+  binding: "NODEJS_FN",
+  image: "./.create-nodejs-fn/Dockerfile",
+  maxInstances: 10,
+} as const;
+
 const initCommand = define({
   name: "init",
-  description: "Interactively scaffold create-nodejs-fn files",
+  description:
+    "Configure create-nodejs-fn for an existing Workers project (requires wrangler.jsonc)",
   args: {
     yes: {
       type: "boolean",
       short: "y",
-      description: "Use defaults and skip prompts",
+      description: "Non-interactive. Assume defaults and skip confirmations (safe defaults).",
     },
     force: {
       type: "boolean",
       short: "f",
-      description: "Overwrite existing files without asking",
+      description:
+        "Overwrite existing files without asking (also rewrites wrangler.jsonc even if it has comments).",
+    },
+    "dry-run": {
+      type: "boolean",
+      description: "Show what would change, but do not write files.",
+    },
+
+    "class-name": {
+      type: "string",
+      description: `Container class name (default: ${DEFAULTS.className})`,
+    },
+    binding: {
+      type: "string",
+      description: `Durable Object binding name (default: ${DEFAULTS.binding})`,
+    },
+    image: {
+      type: "string",
+      description: `Container Dockerfile path for wrangler containers.image (default: ${DEFAULTS.image})`,
+    },
+    "max-instances": {
+      type: "number",
+      description: `Max container instances (default: ${DEFAULTS.maxInstances})`,
+    },
+    "compatibility-date": {
+      type: "string",
+      description: "Compatibility date. If omitted, keeps existing; if missing, uses today (UTC).",
+    },
+    entry: {
+      type: "string",
+      description:
+        "Entry file to append export to. If omitted, uses wrangler.jsonc main; otherwise tries common files; else skips.",
     },
   },
   run: async (ctx) => {
-    const yes = Boolean(ctx.values.yes);
-    const force = Boolean(ctx.values.force);
-    await runInit({ yes, force });
+    const opts: InitOptions = {
+      yes: Boolean(ctx.values.yes),
+      force: Boolean(ctx.values.force),
+      dryRun: Boolean(ctx.values["dry-run"]),
+
+      className: String(ctx.values["class-name"] ?? DEFAULTS.className),
+      binding: String(ctx.values.binding ?? DEFAULTS.binding),
+      image: String(ctx.values.image ?? DEFAULTS.image),
+      maxInstances: Number(ctx.values["max-instances"] ?? DEFAULTS.maxInstances),
+
+      compatibilityDate: ctx.values["compatibility-date"]
+        ? String(ctx.values["compatibility-date"])
+        : undefined,
+
+      entry: ctx.values.entry ? String(ctx.values.entry) : undefined,
+    };
+
+    await runInit(opts);
   },
 });
 
 async function runInit(opts: InitOptions) {
   const cwd = process.cwd();
-  const defaults = await gatherDefaults(cwd);
   const prompter = createPrompter(opts.yes);
 
-  const answers: InitAnswers = {
-    name: await prompter.text("Worker name", defaults.name),
-    main: normalizeEntry(await prompter.text("Entry file", defaults.main)),
-    className: await prompter.text("Container class name", defaults.className),
-    binding: await prompter.text("Durable Object binding", defaults.binding),
-    image: await prompter.text("Container image path", defaults.image),
-    compatibilityDate: await prompter.text("Compatibility date", defaults.compatibilityDate),
-    maxInstances: await prompter.number("Max container instances", defaults.maxInstances),
-  };
-
-  const results: string[] = [];
-
-  if (await ensureDockerfile(cwd, opts, prompter)) {
-    results.push(".create-nodejs-fn/Dockerfile");
-  }
-
-  if (updateGitignore(cwd)) {
-    results.push(".gitignore");
-  }
-
-  if (ensureGeneratedDir(cwd)) {
-    results.push("src/__generated__/");
-  }
-
-  const wranglerResult = await writeWranglerJsonc(cwd, answers, opts, prompter);
-  if (wranglerResult) {
-    results.push("wrangler.jsonc");
-  }
-
-  if (ensureEntryExportsDo(cwd, answers, opts)) {
-    results.push(answers.main);
-  }
-
-  prompter.close();
-
-  if (results.length === 0) {
-    console.log("All files already up to date. Nothing to do.");
+  const wranglerPath = path.join(cwd, "wrangler.jsonc");
+  if (!fs.existsSync(wranglerPath)) {
+    logError(`wrangler.jsonc not found: ${wranglerPath}`);
+    logInfo("This CLI is designed for existing Workers projects with wrangler.jsonc.");
+    process.exitCode = 1;
     return;
   }
 
-  console.log("Updated:");
-  for (const r of results) {
-    console.log(`  - ${r}`);
+  const wrangler = readWranglerJsonc(wranglerPath);
+  if (!wrangler.data || typeof wrangler.data !== "object") {
+    logError("Failed to parse wrangler.jsonc (it might be invalid JSONC).");
+    process.exitCode = 1;
+    return;
   }
 
-  printViteReminder();
+  const plan: { created: string[]; updated: string[]; skipped: string[]; notes: string[] } = {
+    created: [],
+    updated: [],
+    skipped: [],
+    notes: [],
+  };
+
+  // 1) Dockerfile
+  pushResult(plan, await ensureDockerfileFromImagePath(cwd, opts, prompter));
+
+  // 2) .gitignore
+  pushResult(plan, updateGitignore(cwd, opts));
+
+  // 3) src/__generated__/
+  pushResult(plan, ensureGeneratedDir(cwd, opts));
+
+  // 4) wrangler.jsonc merge (never touch name/main)
+  pushResult(
+    plan,
+    await writeWranglerJsoncForExistingProject(wranglerPath, wrangler, opts, prompter),
+  );
+
+  // 5) Inject export into entry (do not prompt for main; infer or skip)
+  const entry = resolveEntryFile(cwd, wrangler.data, opts);
+  if (!entry) {
+    plan.skipped.push("(entry) export injection (could not determine entry file)");
+    plan.notes.push(
+      `Could not determine an entry file, so export injection was skipped. If needed, manually export ${opts.className}.`,
+    );
+  } else {
+    pushResult(plan, ensureEntryExportsDo(cwd, entry, opts));
+  }
+
+  prompter.close();
+  printSummary(plan, opts);
+  printReminders(cwd);
 }
 
-async function ensureDockerfile(cwd: string, opts: InitOptions, prompter: Prompter) {
-  const dockerfilePath = path.join(cwd, ".create-nodejs-fn", "Dockerfile");
-  const dockerDir = path.dirname(dockerfilePath);
+/** ---------- Actions ---------- */
+
+async function ensureDockerfileFromImagePath(cwd: string, opts: InitOptions, prompter: Prompter) {
+  const dockerfileRel = normalizePathLike(opts.image);
+  const dockerfileAbs = path.resolve(cwd, dockerfileRel);
+  const dockerDir = path.dirname(dockerfileAbs);
   ensureDir(dockerDir);
 
-  if (fs.existsSync(dockerfilePath) && !opts.force) {
-    const overwrite = await prompter.confirm(
-      "Dockerfile already exists. Overwrite it?",
-      false,
-    );
-    if (!overwrite) return false;
-  }
+  const relDisplay = path.relative(cwd, dockerfileAbs).replace(/\\/g, "/");
+  const beforeExists = fs.existsSync(dockerfileAbs);
 
   const content = [
     "# create-nodejs-fn container image",
@@ -133,9 +194,11 @@ async function ensureDockerfile(cwd: string, opts: InitOptions, prompter: Prompt
     "FROM node:20-slim",
     "WORKDIR /app",
     "RUN corepack enable",
+    "",
     "# Dependencies are injected via the generated package.json during build.",
     "COPY package.json ./",
     "RUN pnpm install --prod --no-frozen-lockfile",
+    "",
     "# The server bundle is generated at build time.",
     "COPY ./server.mjs ./server.mjs",
     "ENV NODE_ENV=production",
@@ -144,15 +207,22 @@ async function ensureDockerfile(cwd: string, opts: InitOptions, prompter: Prompt
     "",
   ].join("\n");
 
-  writeFileIfChanged(dockerfilePath, content);
-  return true;
+  if (beforeExists && !opts.force) {
+    const existing = fs.readFileSync(dockerfileAbs, "utf8");
+    if (existing === content) return { status: "skipped" as const, file: relDisplay };
+
+    const overwrite = await prompter.confirm(`${relDisplay} already exists. Overwrite it?`, false);
+    if (!overwrite) return { status: "skipped" as const, file: relDisplay };
+  }
+
+  if (!opts.dryRun) writeFileIfChanged(dockerfileAbs, content);
+  return { status: beforeExists ? "updated" : "created", file: relDisplay } as const;
 }
 
-function updateGitignore(cwd: string) {
+function updateGitignore(cwd: string, opts: InitOptions) {
   const target = path.join(cwd, ".gitignore");
-  const existing = fs.existsSync(target)
-    ? fs.readFileSync(target, "utf8").split(/\r?\n/)
-    : [];
+  const beforeExists = fs.existsSync(target);
+  const existing = beforeExists ? fs.readFileSync(target, "utf8").split(/\r?\n/) : [];
 
   const block = [
     "# create-nodejs-fn",
@@ -166,122 +236,120 @@ function updateGitignore(cwd: string) {
   const missing = block.filter((line) => !present.has(line));
   const changed = missing.length > 0;
 
-  if (changed) {
-    if (lines.length && lines[lines.length - 1] !== "") {
-      lines.push("");
-    }
-    for (const line of block) {
-      if (!present.has(line)) {
-        lines.push(line);
-      }
-    }
-  }
+  if (!changed) return { status: "skipped" as const, file: ".gitignore" };
 
-  if (changed) {
-    const cleaned = trimBlankDuplicates(lines).join("\n");
-    fs.writeFileSync(target, cleaned.endsWith("\n") ? cleaned : `${cleaned}\n`);
-  }
+  if (lines.length && lines[lines.length - 1] !== "") lines.push("");
+  for (const line of block) if (!present.has(line)) lines.push(line);
 
-  return changed;
+  const cleaned = trimBlankDuplicates(lines).join("\n");
+  const next = cleaned.endsWith("\n") ? cleaned : `${cleaned}\n`;
+
+  if (!opts.dryRun) fs.writeFileSync(target, next);
+  return { status: beforeExists ? "updated" : "created", file: ".gitignore" } as const;
 }
 
-function ensureGeneratedDir(cwd: string) {
+function ensureGeneratedDir(cwd: string, opts: InitOptions) {
   const dir = path.join(cwd, "src", "__generated__");
-  if (fs.existsSync(dir)) return false;
-  ensureDir(dir);
-  return true;
+  const rel = "src/__generated__/";
+  if (fs.existsSync(dir)) return { status: "skipped" as const, file: rel };
+  if (!opts.dryRun) ensureDir(dir);
+  return { status: "created" as const, file: rel };
 }
 
-async function writeWranglerJsonc(
-  cwd: string,
-  answers: InitAnswers,
+async function writeWranglerJsoncForExistingProject(
+  wranglerPath: string,
+  read: WranglerReadResult,
   opts: InitOptions,
   prompter: Prompter,
 ) {
-  const target = path.join(cwd, "wrangler.jsonc");
-  const exists = fs.existsSync(target);
+  const before = read.data;
 
-  if (exists && !opts.force) {
-    const proceed = await prompter.confirm("wrangler.jsonc already exists. Merge updates?", true);
-    if (!proceed) return false;
+  const merged = mergeWranglerConfigExisting(before, {
+    className: opts.className,
+    binding: opts.binding,
+    image: opts.image,
+    maxInstances: opts.maxInstances,
+  });
+
+  const nextBody = JSON.stringify(merged, null, 2);
+  const next = `${nextBody}\n`;
+
+  const beforeBody = JSON.stringify(before, null, 2);
+  if (beforeBody === nextBody) return { status: "skipped" as const, file: "wrangler.jsonc" };
+
+  // This implementation cannot preserve JSONC comments; confirm unless forced/non-interactive.
+  if (read.hasJsoncComments && !opts.force && !opts.yes) {
+    const ok = await prompter.confirm(
+      "wrangler.jsonc contains comments. This CLI cannot preserve JSONC comments and will rewrite it as JSON. Continue?",
+      false,
+    );
+    if (!ok) return { status: "skipped" as const, file: "wrangler.jsonc" };
   }
 
-  const existing = exists ? readJsonc(target) : {};
-  const merged = mergeWranglerConfig(existing, answers);
-  writeFileIfChanged(target, `${JSON.stringify(merged, null, 2)}\n`);
-  return true;
+  if (!opts.dryRun) writeFileIfChanged(wranglerPath, next);
+  return { status: "updated" as const, file: "wrangler.jsonc" };
 }
 
-function readJsonc(filePath: string): any {
-  try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const withoutBlock = raw.replace(/\/\*[\s\S]*?\*\//g, "");
-    const withoutLine = withoutBlock.replace(/(^|[^:])\/\/.*$/gm, "$1");
-    return JSON.parse(withoutLine);
-  } catch {
-    return {};
-  }
-}
-
-function mergeWranglerConfig(base: any, answers: InitAnswers) {
+function mergeWranglerConfigExisting(
+  base: any,
+  params: {
+    className: string;
+    binding: string;
+    image: string;
+    maxInstances: number;
+  },
+) {
   const out: any = { ...base };
-  out.$schema = out.$schema ?? "node_modules/wrangler/config-schema.json";
-  out.name = out.name ?? answers.name;
-  out.main = out.main ?? (answers.main.startsWith("./") ? answers.main : `./${answers.main}`);
-  out.compatibility_date = out.compatibility_date ?? answers.compatibilityDate;
 
-  const flags: string[] = Array.isArray(out.compatibility_flags) ? out.compatibility_flags : [];
-  if (!flags.includes("nodejs_compat")) flags.push("nodejs_compat");
-  out.compatibility_flags = flags;
-
+  // containers: upsert by class_name
   const containers = Array.isArray(out.containers) ? [...out.containers] : [];
-  const containerIdx = containers.findIndex((c) => c?.class_name === answers.className);
-  const containerEntry = {
-    class_name: answers.className,
-    image: answers.image,
-    max_instances: answers.maxInstances,
+  const idx = containers.findIndex((c) => c?.class_name === params.className);
+  const entry = {
+    class_name: params.className,
+    image: normalizePathLike(params.image),
+    max_instances: params.maxInstances,
   };
-  if (containerIdx >= 0) {
-    containers[containerIdx] = { ...containers[containerIdx], ...containerEntry };
-  } else {
-    containers.push(containerEntry);
-  }
+  if (idx >= 0) containers[idx] = { ...containers[idx], ...entry };
+  else containers.push(entry);
   out.containers = containers;
 
-  const durable = typeof out.durable_objects === "object" && out.durable_objects !== null
-    ? { ...out.durable_objects }
-    : {};
+  // durable_objects.bindings: upsert by name
+  const durable =
+    typeof out.durable_objects === "object" && out.durable_objects !== null
+      ? { ...out.durable_objects }
+      : {};
   const bindings = Array.isArray(durable.bindings) ? [...durable.bindings] : [];
-  const bindingIdx = bindings.findIndex((b) => b?.name === answers.binding);
-  const bindingEntry = { name: answers.binding, class_name: answers.className };
-  if (bindingIdx >= 0) {
-    bindings[bindingIdx] = { ...bindings[bindingIdx], ...bindingEntry };
-  } else {
-    bindings.push(bindingEntry);
-  }
+  const bidx = bindings.findIndex((b) => b?.name === params.binding);
+  const be = { name: params.binding, class_name: params.className };
+  if (bidx >= 0) bindings[bidx] = { ...bindings[bidx], ...be };
+  else bindings.push(be);
   durable.bindings = bindings;
   out.durable_objects = durable;
 
+  // migrations:
+  // If the class is already declared (new_sqlite_classes or new_classes), do nothing.
+  // Otherwise, append a new migration with a safe next tag.
   const migrations = Array.isArray(out.migrations) ? [...out.migrations] : [];
-  const migIdx = migrations.findIndex((m) => m?.tag === "v1");
-  const ensureNewSqlite = (entry: any) => {
-    const classes = Array.isArray(entry.new_sqlite_classes) ? [...entry.new_sqlite_classes] : [];
-    if (!classes.includes(answers.className)) classes.push(answers.className);
-    entry.new_sqlite_classes = classes;
-    return entry;
-  };
-  if (migIdx >= 0) {
-    migrations[migIdx] = ensureNewSqlite({ ...migrations[migIdx], tag: migrations[migIdx].tag ?? "v1" });
-  } else {
-    migrations.push(ensureNewSqlite({ tag: "v1" }));
+  const already =
+    migrations.some(
+      (m) =>
+        Array.isArray(m?.new_sqlite_classes) && m.new_sqlite_classes.includes(params.className),
+    ) ||
+    migrations.some(
+      (m) => Array.isArray(m?.new_classes) && m.new_classes.includes(params.className),
+    );
+
+  if (!already) {
+    const tag = nextMigrationTag(migrations);
+    migrations.push({ tag, new_sqlite_classes: [params.className] });
   }
   out.migrations = migrations;
 
   return out;
 }
 
-function ensureEntryExportsDo(cwd: string, answers: InitAnswers, opts: InitOptions) {
-  const entryRel = answers.main.startsWith("./") ? answers.main.slice(2) : answers.main;
+function ensureEntryExportsDo(cwd: string, entryRelInput: string, opts: InitOptions) {
+  const entryRel = normalizeEntryRel(entryRelInput);
   const entryAbs = path.join(cwd, entryRel);
   ensureDir(path.dirname(entryAbs));
 
@@ -290,38 +358,84 @@ function ensureEntryExportsDo(cwd: string, answers: InitAnswers, opts: InitOptio
     .relative(path.dirname(entryAbs), doAbs)
     .replace(/\\/g, "/")
     .replace(/\.ts$/, "");
-  const exportLine = `export { ${answers.className} } from "${doRel.startsWith(".") ? doRel : `./${doRel}`}";`;
 
-  if (fs.existsSync(entryAbs)) {
+  const exportLine = `export { ${opts.className} } from "${doRel.startsWith(".") ? doRel : `./${doRel}`}";`;
+  const display = entryRel.replace(/\\/g, "/");
+
+  const beforeExists = fs.existsSync(entryAbs);
+  if (beforeExists) {
     const content = fs.readFileSync(entryAbs, "utf8");
-    if (content.includes(exportLine) || content.match(new RegExp(`export\\s+\\{\\s*${answers.className}\\s*\\}.*create-nodejs-fn\\.do`))) {
-      return false;
-    }
-    const next = content.endsWith("\n") ? `${content}${exportLine}\n` : `${content}\n${exportLine}\n`;
-    writeFileIfChanged(entryAbs, next);
-    return true;
+    const already =
+      content.includes(exportLine) ||
+      content.match(
+        new RegExp(
+          `export\\s+\\{\\s*${escapeRegExp(opts.className)}\\s*\\}.*create-nodejs-fn\\.do`,
+        ),
+      );
+    if (already) return { status: "skipped" as const, file: display };
+
+    const next = content.endsWith("\n")
+      ? `${content}${exportLine}\n`
+      : `${content}\n${exportLine}\n`;
+    if (!opts.dryRun) writeFileIfChanged(entryAbs, next);
+    return { status: "updated" as const, file: display };
   }
 
-  const template = `${exportLine}\n`;
-  writeFileIfChanged(entryAbs, template);
-  return true;
+  if (!opts.dryRun) writeFileIfChanged(entryAbs, `${exportLine}\n`);
+  return { status: "created" as const, file: display };
 }
 
-async function gatherDefaults(cwd: string): Promise<InitAnswers> {
-  const pkgPath = path.join(cwd, "package.json");
-  const pkgJson = fs.existsSync(pkgPath)
-    ? JSON.parse(fs.readFileSync(pkgPath, "utf8"))
-    : {};
+/** ---------- Wrangler / Entry detection ---------- */
 
-  return {
-    name: pkgJson.name ?? path.basename(cwd),
-    main: "src/index.ts",
-    className: "NodejsFnContainer",
-    binding: "NODEJS_FN",
-    image: "./.create-nodejs-fn/Dockerfile",
-    compatibilityDate: defaultCompatibilityDate(),
-    maxInstances: 10,
-  };
+function readWranglerJsonc(filePath: string): WranglerReadResult {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const hasJsoncComments = /\/\*[\s\S]*?\*\//.test(raw) || /(^|[^:])\/\/.*$/m.test(raw);
+
+  // Best-effort JSONC stripping.
+  const withoutBlock = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+  const withoutLine = withoutBlock.replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  try {
+    const data = JSON.parse(withoutLine);
+    return { raw, data, hasJsoncComments };
+  } catch {
+    return { raw, data: null, hasJsoncComments };
+  }
+}
+
+function resolveEntryFile(cwd: string, wrangler: any, opts: InitOptions): string | null {
+  if (opts.entry) return opts.entry;
+
+  const main = typeof wrangler?.main === "string" ? wrangler.main.trim() : "";
+  if (main) return main;
+
+  // Common entry candidates in existing projects.
+  const candidates = [
+    "src/index.ts",
+    "src/index.tsx",
+    "src/worker.ts",
+    "src/worker.tsx",
+    "src/main.ts",
+    "src/main.tsx",
+    "index.ts",
+  ];
+
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(cwd, c))) return c;
+  }
+  return null;
+}
+
+function normalizeEntryRel(input: string) {
+  const s = input.startsWith("./") ? input.slice(2) : input;
+  return s.replace(/\\/g, "/");
+}
+
+function normalizePathLike(input: string) {
+  const s = input.trim();
+  if (!s) return input;
+  const withDot = s.startsWith("./") || s.startsWith("/") ? s : `./${s}`;
+  return withDot.replace(/\\/g, "/");
 }
 
 function defaultCompatibilityDate() {
@@ -332,37 +446,36 @@ function defaultCompatibilityDate() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function normalizeEntry(input: string) {
-  if (!input) return "src/index.ts";
-  const withSlash = input.startsWith("./") ? input : `./${input}`;
-  return withSlash.replace(/\\/g, "/");
+function nextMigrationTag(migrations: any[]): string {
+  const tags = new Set<string>();
+  for (const m of migrations) if (m?.tag) tags.add(String(m.tag));
+
+  const lastTag = migrations.length ? String(migrations[migrations.length - 1]?.tag ?? "") : "";
+  const m = lastTag.match(/^v(\d+)$/);
+  if (m) {
+    let n = Number(m[1]) + 1;
+    while (tags.has(`v${n}`)) n++;
+    return `v${n}`;
+  }
+
+  // If tags aren't vN, fall back to cnfN.
+  let i = 1;
+  while (tags.has(`cnf${i}`)) i++;
+  return migrations.length ? `cnf${i}` : "v1";
 }
+
+/** ---------- Prompter ---------- */
 
 function createPrompter(skip: boolean): Prompter {
   if (skip || !process.stdin.isTTY) {
     return {
-      text: async (_message, defaultValue) => defaultValue,
-      number: async (_message, defaultValue) => defaultValue,
       confirm: async (_message, defaultValue = false) => defaultValue,
       close: () => {},
     };
   }
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return {
-    async text(message, defaultValue) {
-      const answer = await rl.question(formatPrompt(message, defaultValue));
-      return answer.trim() || defaultValue;
-    },
-    async number(message, defaultValue) {
-      const answer = await rl.question(formatPrompt(message, String(defaultValue)));
-      const parsed = Number.parseInt(answer.trim(), 10);
-      return Number.isFinite(parsed) ? parsed : defaultValue;
-    },
     async confirm(message, defaultValue = false) {
       const suffix = defaultValue ? " [Y/n] " : " [y/N] ";
       const answer = (await rl.question(`${message}${suffix}`)).trim().toLowerCase();
@@ -375,10 +488,115 @@ function createPrompter(skip: boolean): Prompter {
   };
 }
 
-function formatPrompt(message: string, defaultValue: string | number) {
-  const suffix = defaultValue !== undefined && defaultValue !== null ? ` (${defaultValue})` : "";
-  return `${message}${suffix}: `;
+/** ---------- Reporting ---------- */
+
+function pushResult(
+  plan: { created: string[]; updated: string[]; skipped: string[]; notes: string[] },
+  r: { status: "created" | "updated" | "skipped"; file: string },
+) {
+  if (r.status === "created") plan.created.push(r.file);
+  else if (r.status === "updated") plan.updated.push(r.file);
+  else plan.skipped.push(r.file);
 }
+
+function printSummary(
+  plan: { created: string[]; updated: string[]; skipped: string[]; notes: string[] },
+  opts: InitOptions,
+) {
+  const header = opts.dryRun
+    ? "🧪 Dry run: previewing changes"
+    : "✅ create-nodejs-fn: setup complete";
+  console.log(`\n${header}`);
+
+  const printBlock = (title: string, items: string[]) => {
+    if (!items.length) return;
+    console.log(`\n${title}`);
+    for (const it of items) console.log(`  - ${it}`);
+  };
+
+  printBlock("Created", plan.created);
+  printBlock("Updated", plan.updated);
+  printBlock("Skipped", plan.skipped);
+
+  if (plan.notes.length) {
+    console.log("\nNotes");
+    for (const n of plan.notes) console.log(`  - ${n}`);
+  }
+
+  console.log("");
+}
+
+function printReminders(cwd: string) {
+  const pkgPath = path.join(cwd, "package.json");
+  const pkg = fs.existsSync(pkgPath) ? safeJsonRead(pkgPath) : null;
+
+  // Vite reminder
+  const viteConfig = findFirstExisting(cwd, [
+    "vite.config.ts",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.cjs",
+  ]);
+
+  if (viteConfig) {
+    const raw = fs.readFileSync(viteConfig, "utf8");
+    const hasPlugin = raw.includes("createNodejsFnPlugin");
+    if (!hasPlugin) {
+      console.log(
+        "📌 Reminder: If you use Vite, add the plugin to your Vite config (not detected).",
+      );
+      console.log('  import { createNodejsFnPlugin } from "create-nodejs-fn";');
+      console.log("  export default defineConfig({ plugins: [createNodejsFnPlugin()] });\n");
+    }
+  } else {
+    console.log("📌 Reminder: If you use Vite, add the plugin to your Vite config.");
+    console.log('  import { createNodejsFnPlugin } from "create-nodejs-fn";');
+    console.log("  export default defineConfig({ plugins: [createNodejsFnPlugin()] });\n");
+  }
+
+  // Dependencies reminder
+  const missing: string[] = [];
+  const deps = { ...(pkg?.dependencies ?? {}), ...(pkg?.devDependencies ?? {}) };
+
+  if (!deps["@cloudflare/containers"]) missing.push("@cloudflare/containers");
+  if (!deps["capnweb"]) missing.push("capnweb@0.2.0");
+
+  if (missing.length) {
+    const pm = detectPackageManager(cwd, pkg);
+    console.log("📌 Reminder: Install required dependencies for Workers containers.");
+    console.log(`  ${pm} add ${missing.join(" ")}\n`);
+  }
+}
+
+function safeJsonRead(p: string) {
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function findFirstExisting(cwd: string, files: string[]) {
+  for (const f of files) {
+    const abs = path.join(cwd, f);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+function detectPackageManager(cwd: string, pkg: any) {
+  const pmField = typeof pkg?.packageManager === "string" ? pkg.packageManager : "";
+  if (pmField.startsWith("pnpm")) return "pnpm";
+  if (pmField.startsWith("yarn")) return "yarn";
+  if (pmField.startsWith("bun")) return "bun";
+
+  if (fs.existsSync(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm";
+  if (fs.existsSync(path.join(cwd, "yarn.lock"))) return "yarn";
+  if (fs.existsSync(path.join(cwd, "bun.lockb"))) return "bun";
+  return "npm";
+}
+
+/** ---------- Small utils ---------- */
 
 function trimBlankDuplicates(lines: string[]) {
   const out: string[] = [];
@@ -389,10 +607,15 @@ function trimBlankDuplicates(lines: string[]) {
   return out;
 }
 
-function printViteReminder() {
-  console.log("\nNext step: add the plugin to your Vite config (vite.config.ts):");
-  console.log("  import { createNodejsFnPlugin } from \"create-nodejs-fn\";");
-  console.log("  export default defineConfig({ plugins: [createNodejsFnPlugin()] });");
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function logInfo(msg: string) {
+  console.log(`ℹ️  ${msg}`);
+}
+function logError(msg: string) {
+  console.error(`✖ ${msg}`);
 }
 
 async function main() {
