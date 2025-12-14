@@ -5,18 +5,39 @@
 
 **🚨 WARNING: This project uses INSANE black magic! DO NOT use in production!! 🚨**
 
----
 
 ## 🤯 What is this?
 
-Cloudflare Workers are amazing, but they can't run Node.js native modules (binary addons).
-Want to use `@napi-rs/canvas`, `sharp`, or `pdfjs-dist`? Too bad...?
+Cloudflare Workers are amazing, but they run on the V8 JavaScript engine—**not Node.js**. This means native modules (binary addons compiled with node-gyp) simply don't work. Want to use `@napi-rs/canvas` for image generation, `sharp` for image processing, or `pdfjs-dist` with canvas rendering? You're out of luck...
 
-**Nope. We don't give up that easily.** 🔥
+**...or are you?** 🔥
 
-`create-nodejs-fn` uses the following dark arts to make the impossible possible:
+`create-nodejs-fn` bridges this gap by leveraging **Cloudflare Containers** (currently in beta). Here's how it works:
+
+1. **You write functions in `*.container.ts` files** using any Node.js native modules you want
+2. **The Vite plugin analyzes your code** using `ts-morph` (TypeScript AST manipulation)
+3. **It auto-generates type-safe proxy functions** that look identical to your original exports
+4. **Your container code is bundled with esbuild** and packaged into a Docker image
+5. **At runtime, the proxy transparently routes calls** via Cap'n Proto RPC to the container
+6. **Cloudflare Durable Objects manage container lifecycle** and connection state
+
+The result? You `import { myFunction } from "./native.container"` and call it like any normal function—but it actually executes inside a Docker container running full Node.js with native module support!
 
 ![alt](./assets/black-magic.jpg)
+
+## 🎮 Live Demo
+
+**Try it now!** This example uses `@napi-rs/canvas` + `pdfjs-dist` to render PDF pages as images:
+
+👉 **[Render Bitcoin Whitepaper (Page 1)](https://example-create-nodejs-fn.inaridiy.workers.dev/renderPdf?url=https://bitcoin.org/bitcoin.pdf&pageNum=1&scale=3)**
+
+```
+https://example-create-nodejs-fn.inaridiy.workers.dev/renderPdf?url=https://bitcoin.org/bitcoin.pdf&pageNum=1&scale=3
+```
+
+Yes, this is running on Cloudflare Workers. Yes, it's using native Node.js modules. Yes, it's black magic. 
+
+
 
 
 ## 🪄 The Black Magic Revealed
@@ -60,131 +81,6 @@ export const renderClock = nodejsFn(
 - **Auto-generates Dockerfile**
 - Native deps specified in `external` are auto-extracted to `package.json`
 
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-You need a **Cloudflare Workers + Vite** project. Create one with:
-
-```bash
-# Using Hono (recommended)
-pnpm create hono@latest my-app --template cloudflare-workers+vite
-
-# Then cd into it
-cd my-app
-```
-
-### 1. Install dependencies
-
-```bash
-pnpm add create-nodejs-fn @cloudflare/containers capnweb@0.2.0 @napi-rs/canvas
-```
-
-### 2. Initialize config
-
-```bash
-pnpm create-nodejs-fn init
-```
-
-This configures:
-- Adds Containers & Durable Objects config to `wrangler.jsonc`
-- Generates `.create-nodejs-fn/Dockerfile`
-- Creates `src/__generated__/` directory
-- Adds DO export to entry file
-
-### 3. Configure Vite plugin
-
-```typescript
-// vite.config.ts
-import { cloudflare } from "@cloudflare/vite-plugin";
-import { defineConfig } from "vite";
-import { createNodejsFnPlugin } from "create-nodejs-fn";
-
-export default defineConfig({
-  plugins: [
-    createNodejsFnPlugin({
-      // Native dependencies to install in the container
-      external: ["@napi-rs/canvas"],
-      // Docker config with fonts for text rendering
-      docker: {
-        baseImage: "node:20-bookworm-slim",
-        systemPackages: [
-          "fontconfig",
-          "fonts-noto-core",
-          "fonts-noto-cjk",
-          "fonts-noto-color-emoji",
-        ],
-      },
-    }),
-    cloudflare(),
-  ],
-});
-```
-
-### 4. Write a container function
-
-```typescript
-// src/clock.container.ts
-import { createCanvas } from "@napi-rs/canvas";
-import { nodejsFn } from "./__generated__/create-nodejs-fn.runtime";
-
-export const renderClock = nodejsFn(async () => {
-  // 🎨 Create an image with current time using @napi-rs/canvas!
-  const canvas = createCanvas(600, 200);
-  const ctx = canvas.getContext("2d");
-
-  // Background
-  ctx.fillStyle = "#1a1a2e";
-  ctx.fillRect(0, 0, 600, 200);
-
-  // Text with Noto font (installed via systemPackages)
-  ctx.font = "bold 36px 'Noto Sans CJK JP', 'Noto Color Emoji', sans-serif";
-  ctx.fillStyle = "#eee";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-
-  const now = new Date().toISOString();
-  ctx.fillText(`🕐 ${now}`, 300, 100);
-
-  // Return as PNG data URL
-  return await canvas.toDataURLAsync("image/webp");
-});
-```
-
-### 5. Call it from your Worker like any normal function
-
-```typescript
-// src/index.ts
-import { Hono } from "hono";
-import { renderClock } from "./clock.container";
-
-const app = new Hono();
-
-app.get("/clock", async (c) => {
-  // 😱 Looks like a normal function call!
-  // But behind the scenes, RPC flies to the container!
-  const pngDataUrl = await renderClock();
-
-  // Convert data URL to response
-  return fetch(pngDataUrl);
-});
-
-// Don't forget to export the DO
-export { NodejsFnContainer } from "./__generated__/create-nodejs-fn.do";
-export default { fetch: app.fetch };
-```
-
-### 6. Launch!
-
-```bash
-pnpm dev
-```
-
-Visit `http://localhost:5173/clock` to see a dynamically generated image with the current timestamp! 🎉
-
----
 
 ## ⚙️ Plugin Options
 

@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "example",
+  "name": "example-create-nodejs-fn",
   "compatibility_date": "2025-08-03",
   "main": "./src/index.ts",
   "compatibility_flags": ["nodejs_compat"],
