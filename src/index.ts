@@ -16,7 +16,7 @@ import { makeProject } from "./project-utils";
 import { proxyFilePath, sanitizeNamespace } from "./path-utils";
 import type { DiscoveredModule, Opts, RegenKind } from "./types";
 
-export function createNodejsFn(opts: Opts = {}): Plugin {
+export function createNodejsFnPlugin(opts: Opts = {}): Plugin {
   const files = opts.files ?? ["src/**/*.container.ts"];
   const generatedDir = opts.generatedDir ?? "src/__generated__";
   const binding = opts.binding ?? "NODEJS_FN";
