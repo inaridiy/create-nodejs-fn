@@ -8,6 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@cloudflare/containers':
+        specifier: '>=0.0.31'
+        version: 0.0.31
+      capnweb:
+        specifier: '>=0.2.0'
+        version: 0.2.0
       esbuild:
         specifier: ^0.27.1
         version: 0.27.1
@@ -23,9 +29,6 @@ importers:
       ts-morph:
         specifier: ^27.0.2
         version: 27.0.2
-      vite:
-        specifier: ^7.2.7
-        version: 7.2.7(@types/node@25.0.1)
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.3.8
@@ -39,6 +42,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vite:
+        specifier: ^7.2.7
+        version: 7.2.7(@types/node@25.0.1)
 
   examples/hono-canvas-pdf-js:
     dependencies:
@@ -82,6 +88,34 @@ importers:
       '@cloudflare/containers':
         specifier: ^0.0.31
         version: 0.0.31
+      capnweb:
+        specifier: 0.2.0
+        version: 0.2.0
+      hono:
+        specifier: ^4.11.0
+        version: 4.11.0
+    devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: ^1.2.3
+        version: 1.17.1(vite@6.4.1(@types/node@25.0.1))(workerd@1.20251210.0)(wrangler@4.54.0)
+      vite:
+        specifier: ^6.3.5
+        version: 6.4.1(@types/node@25.0.1)
+      vite-ssr-components:
+        specifier: ^0.5.1
+        version: 0.5.1
+      wrangler:
+        specifier: ^4.17.0
+        version: 4.54.0
+
+  examples/my-app:
+    dependencies:
+      '@cloudflare/containers':
+        specifier: ^0.0.31
+        version: 0.0.31
+      '@napi-rs/canvas':
+        specifier: ^0.1.84
+        version: 0.1.84
       capnweb:
         specifier: 0.2.0
         version: 0.2.0
