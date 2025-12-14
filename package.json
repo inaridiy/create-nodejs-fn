@@ -3,8 +3,11 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "create-nodejs-fn": "./dist/cli.mjs"
+  },
   "scripts": {
-    "build": "tsup src/index.ts --dts --format esm,cjs",
+    "build": "tsup src/index.ts src/cli.ts --dts --format esm",
     "typecheck": "tsc --noEmit",
     "lint": "biome check",
     "lint:fix": "biome check --write",
@@ -25,6 +28,7 @@
   },
   "dependencies": {
     "esbuild": "^0.27.1",
+    "gunshi": "^0.27.0",
     "glob": "^13.0.0",
     "ts-morph": "^27.0.2",
     "vite": "^7.2.7"

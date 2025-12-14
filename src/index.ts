@@ -226,8 +226,8 @@ export function createNodejsFnPlugin(opts: Opts = {}): Plugin {
     reason: string,
     delta: { changed?: string[]; removed?: string[]; force?: boolean },
   ) {
-    delta.changed?.forEach((p) => pendingChanged.add(path.normalize(p)));
-    delta.removed?.forEach((p) => pendingRemoved.add(path.normalize(p)));
+    delta.changed?.map((p) => pendingChanged.add(path.normalize(p)));
+    delta.removed?.map((p) => pendingRemoved.add(path.normalize(p)));
     if (delta.force) pendingForce = true;
     pendingReason = reason;
 
