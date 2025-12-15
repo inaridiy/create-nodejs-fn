@@ -162,27 +162,33 @@ Visit `http://localhost:5173/clock` to see a dynamically generated image with th
 
 ## 🪄 The Black Magic Revealed
 
-### 1️⃣ Transparent Proxy Generation via AST Transformation
+### 1️⃣ Extract `nodejsFn` Contents (Clip & Crop)
 
-Uses `ts-morph` to **statically analyze** `*.container.ts` files.
-Detects exported functions and **auto-generates proxy functions with identical type signatures**.
+The plugin uses `ts-morph` to **statically analyze** `*.container.ts` files and **extracts the function bodies** wrapped in `nodejsFn()`.
 
 ```typescript
 // Your code (clock.container.ts)
 export const renderClock = nodejsFn(async () => {
-  // Node.js native processing...
+  const canvas = createCanvas(600, 200);
+  // ... Node.js native processing
   return pngDataUrl;
 });
 
-// 🧙 The plugin auto-generates a proxy
-// → Types fully preserved! IDE autocomplete works!
-// → Calls are routed to the container via RPC!
+// 🧙 Plugin extracts the inner function from nodejsFn()
+// → Only the function body is clipped out for the container!
 ```
 
-### 2️⃣ Container Management via Durable Objects
+### 2️⃣ Bundle & Build Docker Image
 
-Uses Cloudflare **Durable Objects** to manage container connections.
-Stateful, with multi-instance routing support!
+The extracted functions are **bundled with esbuild** and combined with an auto-generated **Dockerfile** to create a Docker image.
+
+- Functions are bundled as a Cap'n Proto RPC server
+- Native dependencies specified in `external` are auto-extracted to `package.json`
+- Dockerfile is auto-generated and image is built
+
+### 3️⃣ Deploy as Cloudflare Containers
+
+The generated Docker image is **bundled as Cloudflare Containers**, with **Durable Objects** managing the container lifecycle.
 
 ```typescript
 // Route to specific instances with containerKey
@@ -195,11 +201,21 @@ export const renderClock = nodejsFn(
 );
 ```
 
-### 3️⃣ Fully Automated Build with esbuild + Docker
+### 4️⃣ Auto-Replace Imports with Container Calls
 
-- Bundles container server code with **esbuild**
-- **Auto-generates Dockerfile**
-- Native deps specified in `external` are auto-extracted to `package.json`
+Imports to `*.container.ts` files are **automatically replaced with proxy module imports** by the Vite plugin.
+
+```typescript
+// Your code
+import { renderClock } from "./clock.container";
+
+// 🧙 Plugin auto-transforms this!
+// → Actually imports a generated proxy function
+// → Calls are transparently converted to Container RPC!
+// → Types are fully preserved! IDE autocomplete works!
+```
+
+**Result**: Code that looks like normal function calls actually executes inside Docker containers!
 
 
 ## ⚙️ Plugin Options
@@ -259,11 +275,13 @@ project/
 │   ├── clock.container.ts        # Your code
 │   ├── index.ts                  # Worker entry
 │   └── __generated__/            # 🧙 Auto-generated magic
-│       ├── create-nodejs-fn.ts         # RPC client & type definitions
-│       ├── create-nodejs-fn.do.ts      # Durable Object class
-│       ├── create-nodejs-fn.context.ts # Container key resolution
-│       ├── create-nodejs-fn.runtime.ts # nodejsFn / containerKey helpers
-│       └── proxy.src__clock.container.ts # Proxy functions
+│       ├── create-nodejs-fn.ts            # RPC client & type definitions
+│       ├── create-nodejs-fn.do.ts         # Durable Object class
+│       ├── create-nodejs-fn.context.ts    # Container key resolution
+│       ├── create-nodejs-fn.runtime.ts    # nodejsFn / containerKey helpers
+│       ├── create-nodejs-fn-stub-batch.ts # Cap'n Proto RPC batch client
+│       └── __proxies__/
+│           └── p-XXXXXXXX.ts              # Proxy functions (hashed)
 │
 └── .create-nodejs-fn/            # 🐳 Container build artifacts
     ├── Dockerfile                # Auto-generated
