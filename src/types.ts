@@ -32,6 +32,10 @@ export type Opts = {
   binding?: string; // Durable Object binding name
   className?: string; // DO class name
   containerPort?: number;
+  /**
+   * Duration before containers are put to sleep. Accepts the Cloudflare duration string format (e.g. "10s", "5m").
+   */
+  sleepAfter?: string;
   external?: string[];
   docker?: DockerOptions;
   /**

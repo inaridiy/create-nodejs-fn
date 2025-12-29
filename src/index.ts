@@ -22,6 +22,7 @@ export function createNodejsFnPlugin(opts: Opts = {}): Plugin {
   const binding = opts.binding ?? "NODEJS_FN";
   const className = opts.className ?? "NodejsFnContainer";
   const containerPort = opts.containerPort ?? 8080;
+  const sleepAfter = opts.sleepAfter ?? "10s";
   const external = opts.external ?? [];
   const docker = opts.docker ?? {};
   const workerEnvVars = opts.workerEnvVars ?? [];
@@ -139,6 +140,7 @@ export function createNodejsFnPlugin(opts: Opts = {}): Plugin {
       binding,
       className,
       containerPort,
+      sleepAfter,
       workerEnvVars,
       clientFileName: GENERATED_FILENAMES.client,
       doFileName: GENERATED_FILENAMES.durableObject,

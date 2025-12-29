@@ -236,6 +236,9 @@ createNodejsFnPlugin({
   
   // Container port (default: 8080)
   containerPort: 8080,
+
+  // Duration before containers are put to sleep (default: "10s")
+  sleepAfter: "30s",
   
   // External dependencies to install in container
   external: ["@napi-rs/canvas", "sharp"],
