@@ -11,6 +11,7 @@ export type WorkerFileGenOptions = {
   binding: string;
   className: string;
   containerPort: number;
+  sleepAfter: string;
   workerEnvVars: string[] | Record<string, string>;
   clientFileName: string;
   doFileName: string;
@@ -26,6 +27,7 @@ export function generateWorkerFiles(opts: WorkerFileGenOptions) {
     binding,
     className,
     containerPort,
+    sleepAfter,
     workerEnvVars,
     clientFileName,
     doFileName,
@@ -177,7 +179,7 @@ return { ${objLines.join(" ")} } as any;
       extends: "Container",
       properties: [
         { name: "defaultPort", initializer: String(containerPort) },
-        { name: "sleepAfter", initializer: JSON.stringify("10s") },
+        { name: "sleepAfter", initializer: JSON.stringify(sleepAfter) },
         ...(envVarInitializer ? [{ name: "envVars", initializer: envVarInitializer }] : []),
       ],
     });
