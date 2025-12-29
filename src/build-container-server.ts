@@ -38,6 +38,10 @@ function collectExternalDeps(rootPkgPath: string, needed: string[]) {
   };
 }
 
+function isCustomDockerfile(opts: DockerOptions | undefined): opts is { dockerfilePath: string } {
+  return Boolean(opts && "dockerfilePath" in opts && typeof opts.dockerfilePath === "string");
+}
+
 export type BuildContainerServerOptions = {
   mods: DiscoveredModule[];
   outBaseAbs: string;
@@ -135,12 +139,39 @@ http.createServer((req, res) => {
     );
   }
 
+  if (isCustomDockerfile(dockerOpts)) {
+    const customPath = path.resolve(root, dockerOpts.dockerfilePath);
+    if (!fs.existsSync(customPath)) {
+      throw new Error(
+        `[create-nodejs-fn] Custom Dockerfile not found: ${dockerOpts.dockerfilePath} (resolved to ${customPath})`,
+      );
+    }
+    let customDockerfile = fs.readFileSync(customPath, "utf8");
+
+    // Ensure the container launches the generated server unless the user already does.
+    if (!/server\.mjs/.test(customDockerfile) || !/\b(CMD|ENTRYPOINT)\b/.test(customDockerfile)) {
+      const trimmed = customDockerfile.replace(/\s*$/, "");
+      const suffix = [
+        trimmed,
+        "",
+        "# create-nodejs-fn runtime start",
+        'CMD ["node", "./server.mjs"]',
+        "",
+      ].join("\n");
+      customDockerfile = suffix;
+    }
+
+    writeFileIfChanged(dockerfile, customDockerfile);
+    return;
+  }
+
   const {
     baseImage = "node:20-slim",
     systemPackages = [],
     preInstallCommands = [],
     postInstallCommands = [],
     env: dockerEnv = {},
+    user,
   } = dockerOpts ?? {};
 
   const installLines = "RUN corepack enable && pnpm install --prod --no-frozen-lockfile";
@@ -160,6 +191,16 @@ http.createServer((req, res) => {
     "ENV NODE_ENV=production",
     ...Object.entries(dockerEnv).map(([k, v]) => `ENV ${k}=${JSON.stringify(v ?? "")}`),
   ];
+  const userLines =
+    user && user.name
+      ? [
+          "# Runtime user (from plugin options)",
+          `RUN groupadd --system${user.gid ? ` --gid ${user.gid}` : ""} ${user.name} \\`,
+          `    && useradd --system --create-home --no-log-init --home-dir /home/${user.name} --gid ${user.name}${user.uid ? ` --uid ${user.uid}` : ""} ${user.name}`,
+          `RUN mkdir -p /app && chown -R ${user.name}:${user.name} /app`,
+          `USER ${user.name}`,
+        ]
+      : [];
 
   writeFileIfChanged(
     dockerfile,
@@ -176,6 +217,7 @@ http.createServer((req, res) => {
       "COPY ./server.mjs ./server.mjs",
       ...envLines,
       ...postRuns,
+      ...userLines,
       `EXPOSE ${containerPort}`,
       `CMD ["node", "./server.mjs"]`,
       "",
