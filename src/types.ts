@@ -1,11 +1,29 @@
-export type DockerOptions = {
+export type DockerUser = {
+  name: string;
+  uid?: number;
+  gid?: number;
+};
+
+export type GeneratedDockerOptions = {
   baseImage?: string;
   systemPackages?: string[];
   preInstallCommands?: string[];
   postInstallCommands?: string[];
   env?: Record<string, string>;
   extraLines?: string[];
+  /**
+   * Create and switch to a non-root runtime user.
+   * Package installs still run as root; the user is applied before CMD.
+   */
+  user?: DockerUser;
 };
+
+export type CustomDockerfileOption = {
+  /** Use a fully custom Dockerfile (path resolved from project root). */
+  dockerfilePath: string;
+};
+
+export type DockerOptions = GeneratedDockerOptions | CustomDockerfileOption;
 
 export type Opts = {
   files?: string[];

@@ -236,6 +236,10 @@ createNodejsFnPlugin({
     preInstallCommands: [],
     postInstallCommands: [],
     env: { MY_VAR: "value" },
+    // Run as a non-root user inside the container
+    user: { name: "app", uid: 1000, gid: 1000 },
+    // Or replace everything above with a fully custom Dockerfile
+    // dockerfilePath: "./containers/native.Dockerfile",
   },
   
   // Environment variables to pass from Worker to Container
@@ -248,6 +252,9 @@ createNodejsFnPlugin({
   rebuildDebounceMs: 600,
 });
 ```
+
+- `docker.user` lets you switch the runtime to a non-root user after installs while keeping generated paths (`/app`) writable.
+- To own the entire build, supply `docker: { dockerfilePath: "./containers/native.Dockerfile" }`. The type prevents mixing this with other docker options so you don't accidentally combine incompatible settings. If the custom Dockerfile doesn't already start `server.mjs`, the generator will append `CMD ["node", "./server.mjs"]` to the end.
 
 ---
 
