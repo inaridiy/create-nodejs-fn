@@ -1,6 +1,6 @@
 {
   "name": "create-nodejs-fn",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Vite plugin to enable calling Node.js-dependent functions directly from Cloudflare Workers!!",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

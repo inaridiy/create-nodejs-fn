@@ -1,5 +1,11 @@
 # create-nodejs-fn
 
+## 0.1.1
+
+### Patch Changes
+
+- e0af34b: add sleepafter options
+
 ## 0.1.0
 
 ### Minor Changes
